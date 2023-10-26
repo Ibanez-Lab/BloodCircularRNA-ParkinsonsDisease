@@ -1,4 +1,4 @@
-# BloodCircularRNA-ParkinsonsDisease
+# Circulating blood circular RNA in Parkinson’s Disease; a systematic study | Beric et al.
 
 Code used for data processing and analyses is provided in the following files:
 
