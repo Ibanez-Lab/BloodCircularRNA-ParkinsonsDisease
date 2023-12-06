@@ -10,7 +10,7 @@ library(ggrepel)
 library(ggpubr)
 library(org.Hs.eg.db)
 
-#PDBP MIXED MODEL (simple)
+# 1.0 PDBP MIXED MODEL (simple)-----------------------------------------------------------------------------------------------------------------------------------------------------------
 #load phenotype 
 pheno <- read.table('load/pdbp_phenotype.file.txt', header = T, stringsAsFactors = F)
 
@@ -109,7 +109,7 @@ plotStatus <- ggplot(pcaData, aes(x = PC1, y = PC2, color = group)) + geom_point
 
 
 
-#Generation of Longtable
+# 1.2 Generation of Longtable--------------------------------------------------
 
 # load normalized count matrix
 counts<-read.table("load/pdbp_normalized_matrix.csv",header = T, stringsAsFactors = F)
@@ -155,12 +155,8 @@ mixed_model_longtable$counts_at_baseline <- -9
 mixed_model_longtable <- mixed_model_longtable %>% group_by(PATNO, RNA) %>% mutate(counts_at_baseline = counts[which(time_in_years == min(time_in_years))])
 
 any(mixed_model_longtable$counts_at_baseline == -9) # should be FALSE
-
-
-
 patno <- unique(mixed_model_longtable$PATNO)
 linear_names <- unique(mixed_model_longtable$RNA)
-
 rand_linear <- linear_names[sample(1:length(linear_names), 1)]
 rand_sample <- patno[sample(1:length(patno), 1)]
 mixed_model_longtable %>% filter(PATNO == rand_sample, RNA == rand_linear)
@@ -168,15 +164,13 @@ mixed_model_longtable %>% filter(PATNO == rand_sample, RNA == rand_linear)
 write.table(mixed_model_longtable, 'save/pdbp_longtable.txt', row.names = F, col.names = T)
 
 
-#MIXED MODEL WITH LONGTABLE
+# 1.3 MIXED MODEL WITH LONGTABLE------------------------------------------------
+
 # load in the Longtable
 data<- read.table("load/pdbp_longtable.txt", header = T, stringsAsFactors = F)
 data <- data[order(data$PATNO, data$RNA),]
 data <- group_by(data, PATNO, RNA)
 data <- mutate(data, visit_counts = length(time_in_years))
-
-
-
 # filtered with as least two visits
 atleast_2_visit <- subset(data, data$visit_counts > 1)
 
@@ -223,7 +217,8 @@ result_table<- as.data.frame(selected_columns)
 #write.table(result_table,"save/pdbp_results.txt", quote = F, col.names = T, row.names = F, sep = '\t')
 
 
-#Ploting for gene symbols intea of ENSEMBL ids
+#1.4 Ploting for gene symbols intea of ENSEMBL ids----------------------------------------
+
 DE<-full_result_table
 #extracting ensembl-ids
 ensembl_ids <- DE$linear
@@ -256,8 +251,6 @@ plotDE <- DE %>% mutate(gene_type = case_when(beta >= l2f.lim & padj <= plim ~ "
 result_9circ<- read.table("nince/circs.txt", header = T)  
 circ_names<-result_9circ$linear
 
-
-
 #Subset the result_table based on circRNA names to create nine_circ
 nine_circ<- plotDE[plotDE$linear %in% circ_names, ]
 
@@ -268,7 +261,6 @@ cols[plotDE$gene_type=='down']<-"#56B4E9"
 cols[plotDE$gene_type=='ns']<-"#999999"
 sizes <- c("up" = 2, "down" = 2, "ns" = 1)
 alphas <- c("up" = 1, "down" = 1, "ns" = 0.5)
-
 
 ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   geom_point(col= cols)+
@@ -285,7 +277,9 @@ ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   theme(legend.position = "none")
 
 
-#PDBP MIXED MODEL (Cell Counts)
+# 2.0 PDBP MIXED MODEL (Cell Counts)------------------------------------------------------------------------------------------------------------------------
+
+#2.1 Longatble ---------------------------------------
 
 # load normalized count matrix
 counts<-read.table("load/pdbp_normalized_matrix.txt",header = T, stringsAsFactors = F)
@@ -347,7 +341,7 @@ mixed_model_longtable %>% filter(PATNO == rand_sample, RNA == rand_linear)
 
 write.table(mixed_model_longtable, 'save/cell_counts_pdbp_longtable.txt', quote= F, sep = '\t', row.names = F, col.names = T)
 
-#MIXED MODEL WITH LONGTABLE
+#2.2 MIXED MODEL WITH LONGTABLE---------------------------------------------
 
 # load normalized count matrix
 data<- read.table("read/cell_counts_pdbp_longtable.txt", header = T, stringsAsFactors = F)
@@ -374,11 +368,8 @@ for (one_linear in loop_linear){
   rownames(res) <- NULL
   full_result_table <- rbind(full_result_table, res)
 }
-
-
 # save result table
 full_result_table %>% write.table("save/cell_counts_pdbp_results.txt", quote = F, col.names = T, row.names = F, sep = '\t')
-
 
 #Read table
 full_result_table<- read.table("load/cell_counts_pdbp_results.txt", header =T) 
@@ -392,7 +383,6 @@ full_result_table <- full_result_table %>%
 #Create a table for intercept and interaction
 full_result_table<- subset(full_result_table, full_result_table$covar == 'conditioncontrol:years')
 
-
 #Creating an specific table
 selected_columns <- full_result_table[, c("linear","beta", "p", "padj")]
 
@@ -401,7 +391,8 @@ result_table<- as.data.frame(selected_columns)
 
 #write.table(result_table,"save/cell_counts_results.txt", quote = F, col.names = T, row.names = F, sep = '\t')
 
-#Ploting for gene symbols instead of ENSEMBL ids
+# 2.3 Ploting for gene symbols instead of ENSEMBL ids------------------------------------
+
 DE<-result_table
 #extracting degs
 ensembl_ids <- DE$linear
@@ -411,7 +402,6 @@ primary_gene_id <- sub("\\..*", "", ensembl_ids)
 gene_symbols <- mapIds(org.Hs.eg.db, keys = primary_gene_id, column = "SYMBOL", keytype = "ENSEMBL")
 # Add the gene symbols as a new column in your DEG data frame
 DE$gene_symbol <- gene_symbols
-
 
 #Reorganizing the df
 #Creating an specific table
