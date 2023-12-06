@@ -3,8 +3,14 @@ library(tximport)
 library(DESeq2)
 library(readxl)
 library(ggplot2)
+library(metaRNASeq)
+#1.0 QC-----------------------------------------------------------------------------------------------------------------------------------------------------------
+
 # pheno<- read.table("load/ppmi_pheno.txt", header = T, stringsAsFactors = F)
 # pheno <- subset(pheno, pheno$Status_time != 2)
+
+# 1.1 Create the count matrix--------------------------------------------
+
 # # Base directory where subdirectories with quant.genes.sf files are located
 # base_directory <- "base/directory"
 
@@ -61,28 +67,23 @@ sample_ids <- pheno$FILE_NAME
 countMatrixfinal<- countMatrixclean[, sample_ids]
 countMatrixfinal<-floor(countMatrixfinal)
 
-
 #First create a phase column using the File_NAME
 pheno$phase <- ifelse(grepl("Phase1", pheno$FILE_NAME), "Phase1", ifelse(grepl("Phase2", pheno$FILE_NAME), "Phase2", NA))
 pheno$phase<- factor(pheno$phase)
 
 
+# 1.2 count normalization ------------------------------------------------
 
-#count normalization
 rnaDDS <- DESeqDataSetFromMatrix(countData =countMatrixfinal , colData = pheno, design = ~ 1)
-
-
 vstDDS<-vst(rnaDDS)
 # vstDDS<-varianceStabilizingTransformation(rnaDDS)
 vst_countmatrix<-assay(vstDDS)
-
 # #save the normalized count matrix for easier loading
 # write.table(vst_countmatrix,"save/ppmi_normalized_matrix.txt")
 # vstDDS<-read.table("load/count/matrix.txt", header = T)
 
 
-
-#Principal Components Analyses
+# 1.3 Principal Components Analyses---------------------------------------
 
 # plotPCA(vst.all, intgroup="sex")
 pcaData <- plotPCA(vstDDS, intgroup="phase",ntop=22218 ,returnData = T)
@@ -106,7 +107,10 @@ plotStatus <- ggplot(pcaData, aes(x = PC1, y = PC2, color = group)) + geom_point
   geom_vline(xintercept = range.pc1, linetype = 'dashed') +
   scale_color_manual(values=panel) + theme_bw()
 
-#LONGTABLE
+# 2.0 Simple Model----------------------------------------------------------------------------------------------------------------------------------------------
+
+
+# 2.1 LONGTABLE--------------------------------------------------------
 
 # load normalized count matrix
 data <- read.table("load/ppmi_normalized_matrix.csv", header = T, stringsAsFactors = F)
@@ -155,7 +159,9 @@ mixed_model_longtable %>% filter(PATNO == rand_sample, circRNA == rand_circ)
 
 write.table(mixed_model_longtable, 'save/ppmi_longtable.txt', quote= F, sep = '\t', row.names = F, col.names = T)
 
-# RUN MIXED MODEL
+
+#2.2 RUN MIXED MODEL-----------------------------------------------------------
+
 data<- read.table("load/ppmi_longtable.txt", header = T, stringsAsFactors = F)
 data <- data %>% group_by(PATNO, circRNA) %>% mutate(visit_counts = length(time_in_years))
 # filtered with as least two visits
@@ -190,40 +196,32 @@ full_result_table$p <-as.numeric(full_result_table$p)
 full_result_table <- full_result_table %>%
   group_by(covar) %>%
   mutate(padj = p.adjust(p, method = "fdr"))
-
-
-
-
 #Create a table for  interaction
 full_result_table<- subset(full_result_table, full_result_table$covar == 'conditioncontrol:years')
 #Creating an specific table
 selected_columns <- full_result_table[, c("linear","beta", "p", "padj")]
 # Create a new data frame with the selected columns
 result_table<- as.data.frame(selected_columns)
-
-
 #  Getting the Gene symbols
 DE<-full_result_table
 #extracting degs
 ensembl_ids <- DE$linear
+
 # Remove everything after the dot (including the dot)
 primary_gene_id <- sub("\\..*", "", ensembl_ids)
 # Map Ensembl IDs to gene symbols
 gene_symbols <- mapIds(org.Hs.eg.db, keys = primary_gene_id, column = "SYMBOL", keytype = "ENSEMBL")
 # Add the gene symbols as a new column in your DEG data frame
 DE$gene_symbol <- gene_symbols
-
-
-
 #Reorganizing the df
 #Creating an specific table
 selected_columns <- DE[, c("gene_symbol","beta", "p", "padj", "linear")]
-
 # Create a new data frame with the selected columns
 DE<- as.data.frame(selected_columns)
-# DE<-na.omit(DE)
 
-#VOLCANO PLOT
+
+# 2.3 VOLCANO PLOT------------------------------------------------------- 
+
 DE <- DE[order(DE$padj), ]
 volcano.name <- "PPMI  Longitudinal differential expression"
 l2f.lim <- 0
@@ -233,9 +231,7 @@ plotDE <- DE %>% mutate(gene_type = case_when(beta >= l2f.lim & padj <= plim ~ "
 
 #Get the 9 circ degs
 result_9circ<- read.table("load/9circs.txt", header = T)
-
 circ_names<-result_9circ$linear
-
 #Subset the result_table based on circRNA names
 nine_circ<- plotDE[plotDE$linear %in% circ_names, ]
 
@@ -260,8 +256,9 @@ ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   theme_bw()+
   theme(legend.position = "none")
 
-#PPMI MIXED MODEL (cell counts)
-#LONGTABLE
+#3.0 MIXED MODEL (cell counts)-----------------------------------------------------------------------------------------------------------------------------------------
+
+# 3.1 LONGTABLE-----------------------------------------------------
 
 # load normalized count matrix
 data <- read.table("load/ppmi_normalized_matrix.txt", header = T, stringsAsFactors = F)
@@ -281,16 +278,12 @@ pheno$sample_id_2 <- gsub("M4", "M36", pheno$sample_id_2)
 # Load cell coun data
 cell_counts<-read.csv("load/ppmi_cellcounts.csv")
 colnames(cell_counts)[colnames(cell_counts) == "sample_id"] <- "sample_id_2"
-
-
 #merge cell counts to pheno
 pheno <- merge(cell_counts, pheno, by = "sample_id_2")
-
-
 pheno <- subset(pheno, pheno$Status_time != 2)
 data <- data[ , colnames(data) %in% pheno$FILE_NAME]
 pheno<- pheno[colnames(data) %in% pheno$FILE_NAME,]
- 
+
  mixed_model_pheno <- pheno %>% dplyr::select(sample_id = FILE_NAME, sex = Gender, status = Status_time, AgeVisit, time_in_years, PATNO, B_cell, T_cell_CD4, T_cell_CD8, Monocyte, NK_cell, Neutrophil)
 
  # set age at baseline to their age at first visit
@@ -328,7 +321,9 @@ mixed_model_longtable %>% filter(PATNO == rand_sample, circRNA == rand_circ)
  
  write.table(mixed_model_longtable, 'save/ppmi_cell_counts_longtable.txt', quote= F, sep = '\t', row.names = F, col.names = T)
 
-#RUN MIXED MODEL
+
+#3.1 RUN MIXED MODEL----------------------------------------------------
+
 data <- read.table("load/ppmi_longtable.txt", header = T, stringsAsFactors = F)
 data <- data %>% group_by(PATNO, circRNA) %>% mutate(visit_counts = length(time_in_years))
 # filtered with as least two visits
@@ -364,17 +359,14 @@ full_result_table <- full_result_table %>%
   group_by(covar) %>%
   mutate(padj = p.adjust(p, method = "fdr"))
 
-
 #Create a table for  interaction
 full_result_table<- subset(full_result_table, full_result_table$covar == 'conditioncontrol:years')
-
 
 #Creating an specific table
 selected_columns <- full_result_table[, c("linear","beta", "p", "padj")]
 
 # Create a new data frame with the selected columns
 result_table<- as.data.frame(selected_columns)
-
 
 #Getting  the  gene symbols
 DE<-full_result_table
@@ -387,8 +379,6 @@ gene_symbols <- mapIds(org.Hs.eg.db, keys = primary_gene_id, column = "SYMBOL", 
 # Add the gene symbols as a new column in your DEG data frame
 DE$gene_symbol <- gene_symbols
 
-
-
 #Reorganizing the df
 #Creating an specific table
 selected_columns <- DE[, c("gene_symbol","beta", "p", "padj", "linear")]
@@ -397,7 +387,7 @@ selected_columns <- DE[, c("gene_symbol","beta", "p", "padj", "linear")]
  DE_cc<- as.data.frame(selected_columns)
 
 
-#VOLCANO PLOT
+# 3.3 VOLCANO PLOT--------------------------------------------------------
 
 DE <- DE[order(DE$padj), ]
 volcano.name <- "PPMI  Longitudinal differential expression + Cell counts"
@@ -433,15 +423,17 @@ ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   theme_bw()+
   theme(legend.position = "none")
 
-#PPMI MIXED MODEL (Medication)
+
+# 4.0 PPMI MIXED MODEL (Medication)-------------------------------------------------------------------------------------------------------------------------------------------
+
+
+#4.1 Longtable---------------------------
+
 # load normalized count matrix
 data <- read.table("load/count/matrix.txt", header = T, stringsAsFactors = F)
 
 # load cleaned phenotype data
 pheno <- read.table('load/phenotype.txt', header = T, stringsAsFactors = F)
-
-
-
 pheno <- subset(pheno, pheno$Status_time != 2)
 data <- data[ , colnames(data) %in% pheno$FILE_NAME]
 
@@ -481,12 +473,11 @@ li_names <- unique(mixed_model_longtable$RNA)
 rand_li <- li_names[sample(1:length(li_names), 1)]
 rand_sample <- patno[sample(1:length(patno), 1)]
 mixed_model_longtable %>% filter(PATNO == rand_sample, RNA == rand_li)
-
 write.table(mixed_model_longtable, 'save/longtable.txt', quote= F, sep = '\t', row.names = F, col.names = T)
 
 
+#4.1 RUN MIXED MODEL------------------------------------------------------
 
-#RUN MIXED MODEL
 data <- read.table("load/longtable.txt", header = T, stringsAsFactors = F)
 data <- data %>% group_by(PATNO, RNA) %>% mutate(visit_counts = length(time_in_years))
 # filtered with as least two visits
@@ -522,19 +513,14 @@ full_result_table <- full_result_table %>%
   group_by(covar) %>%
   mutate(padj = p.adjust(p, method = "fdr"))
 
-
-
-
 #Create a table for  interaction
 full_result_table<- subset(full_result_table, full_result_table$covar == 'conditioncontrol:years')
-
 
 #Creating an specific table
 selected_columns <- full_result_table[, c("linear","beta", "p", "padj")]
 
 # Create a new data frame with the selected columns
 result_table<- as.data.frame(selected_columns)
-
 
 #Getting  the  gene symbols
 DE<-full_result_table
@@ -547,8 +533,6 @@ gene_symbols <- mapIds(org.Hs.eg.db, keys = primary_gene_id, column = "SYMBOL", 
 # Add the gene symbols as a new column in your DEG data frame
 DE$gene_symbol <- gene_symbols
 
-
-
 #Reorganizing the df
 #Creating an specific table
 selected_columns <- DE[, c("gene_symbol","beta", "p", "padj", "linear")]
@@ -559,7 +543,9 @@ DE<- as.data.frame(selected_columns)
 DE <- DE[order(DE$padj), ]
 
 
-#VOLCANO PLOT
+# 4.3 VOLCANO PLOT----------------------------------------
+
+
 volcano.name <- "PPMI  Longitudinal differential expression + Medication"
 l2f.lim <- 0
 plim <- 0.05
@@ -571,17 +557,12 @@ result_9circ<- read.table("load/9circ.txt", header = T)
 circ_names<-result_9circ$linear
 #Subset the result_table based on circRNA names
 nine_circ<- plotDE[plotDE$linear %in% circ_names, ]
-
-
-
 cols <- densCols(plotDE$beta, plotDE$padj)
 cols[plotDE$gene_type=='up']<-"#E69F00"
 cols[plotDE$gene_type=='down']<-"#56B4E9"
 cols[plotDE$gene_type=='ns']<-"#999999"
 sizes <- c("up" = 2, "down" = 2, "ns" = 1)
 alphas <- c("up" = 1, "down" = 1, "ns" = 0.5)
-
-
 ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   geom_point(col= cols)+
   scale_y_continuous(expand = c(0,0), limits = c(0, 6))+
@@ -596,7 +577,11 @@ ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   theme_bw()+
   theme(legend.position = "none")
 
-#PPMI MIXED MODEL (MEDICATION + Cell Counts)
+
+# 5.1 PPMI MIXED MODEL (MEDICATION + Cell Counts)-----------------------------------------------------------------------------------------------------------------------------------
+
+#5.1 Longtable----------------------------------------
+
 # load normalized count matrix
 data <- read.table("load/count/matrix.txt", header = T, stringsAsFactors = F)
 
@@ -617,9 +602,6 @@ cell_counts<-read.csv("load/cellcounts.csv")
 colnames(cell_counts)[colnames(cell_counts) == "sample_id"] <- "sample_id_2"
 #merge cell counts to pheno
 pheno <- merge(cell_counts, pheno, by = "sample_id_2")
-
-
-
 pheno <- subset(pheno, pheno$Status_time != 2)
 data <- data[ , colnames(data) %in% pheno$FILE_NAME]
 
@@ -663,8 +645,8 @@ mixed_model_longtable %>% filter(PATNO == rand_sample, RNA == rand_li)
 write.table(mixed_model_longtable, 'save/longtable.txt', quote= F, sep = '\t', row.names = F, col.names = T)
 
 
+#5.2 RUN MIXED MODEL------------------------------------------------
 
-#RUN MIXED MODEL
 data <- read.table("load/longtable.txt", header = T, stringsAsFactors = F)
 data <- data %>% group_by(PATNO, RNA) %>% mutate(visit_counts = length(time_in_years))
 # filtered with as least two visits
@@ -686,7 +668,6 @@ for (one_circ in loop_circs){
   rownames(res) <- NULL
   full_result_table <- rbind(full_result_table, res)
 }
-
 # save result table
 write.table(full_result_table, "save/results.txt", quote = F, col.names = T, row.names = F, sep = '\t')
 
@@ -698,20 +679,14 @@ full_result_table$p <-as.numeric(full_result_table$p)
 full_result_table <- full_result_table %>%
   group_by(covar) %>%
   mutate(padj = p.adjust(p, method = "fdr"))
-
-
-
-
 #Create a table for  interaction
 full_result_table<- subset(full_result_table, full_result_table$covar == 'conditioncontrol:years')
-
 
 #Creating an specific table
 selected_columns <- full_result_table[, c("linear","beta", "p", "padj")]
 
 # Create a new data frame with the selected columns
 result_table<- as.data.frame(selected_columns)
-
 
 #Getting the  gene symbols
 DE<-full_result_table
@@ -724,8 +699,6 @@ gene_symbols <- mapIds(org.Hs.eg.db, keys = primary_gene_id, column = "SYMBOL", 
 # Add the gene symbols as a new column in your DEG data frame
 DE$gene_symbol <- gene_symbols
 
-
-
 #Reorganizing the df
 #Creating an specific table
 selected_columns <- DE[, c("gene_symbol","beta", "p", "padj", "linear")]
@@ -735,8 +708,8 @@ DE<- as.data.frame(selected_columns)
 # DE<-na.omit(DE)
 DE <- DE[order(DE$padj), ]
 
+# 5.3 VOLCANO PLOT-----------------------------------------
 
-#VOLCANO PLOT
 volcano.name <- "PPMI  Longitudinal differential expression + Cell counts + Medication"
 l2f.lim <- 0
 plim <- 0.05
@@ -748,16 +721,12 @@ result_9circ<- read.table("load/9circ.txt", header = T)
 circ_names<-result_9circ$linear
 #Subset the result_table based on circRNA names
 nine_circ<- plotDE[plotDE$linear %in% circ_names, ]
-
-
-
 cols <- densCols(plotDE$beta, plotDE$padj)
 cols[plotDE$gene_type=='up']<-"#E69F00"
 cols[plotDE$gene_type=='down']<-"#56B4E9"
 cols[plotDE$gene_type=='ns']<-"#999999"
 sizes <- c("up" = 2, "down" = 2, "ns" = 1)
 alphas <- c("up" = 1, "down" = 1, "ns" = 0.5)
-
 
 ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   geom_point(col= cols)+
@@ -774,7 +743,10 @@ ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   theme(legend.position = "none")
 
 
-#PPMI MIXED MODEL (Mutation)
+# 6.0 PPMI MIXED MODEL (Mutation)----------------------------------------------------------------------------------------------------------------------------------------------
+
+
+# 6.1 Longtable---------------------------------------------
 
 # load normalized count matrix
 data <- read.table("load/count/matrix.txt", header = T, stringsAsFactors = F)
@@ -831,7 +803,9 @@ rand_sample <- patno[sample(1:length(patno), 1)]
 #
 write.table(mixed_model_longtable, 'save/longtable.txt', quote= F, sep = '\t', row.names = F, col.names = T)
 
-#RUN MIXED MODEL 
+
+# 6.1 RUN MIXED MODEL-----------------------------------------
+
 data <- read.table("load/longtable.txt", header = T, stringsAsFactors = F)
 data <- data %>% group_by(PATNO, RNA) %>% mutate(visit_counts = length(time_in_years))
 # filtered with as least two visits
@@ -857,9 +831,6 @@ for (one_circ in loop_circs){
 
 # save result table
 write.table(full_result_table, "save/results.txt", quote = F, col.names = T, row.names = F, sep = '\t')
-
-
-
 
 #Read table
 full_result_table<- read.table("save/results.txt")
@@ -889,8 +860,6 @@ gene_symbols <- mapIds(org.Hs.eg.db, keys = primary_gene_id, column = "SYMBOL", 
 # Add the gene symbols as a new column in your DEG data frame
 DE$gene_symbol <- gene_symbols
 
-
-
 #Reorganizing the df
 #Creating an specific table
 selected_columns <- DE[, c("gene_symbol","beta", "p", "padj", "linear")]
@@ -900,7 +869,9 @@ DE<- as.data.frame(selected_columns)
 # DE<-na.omit(DE)
 DE <- DE[order(DE$padj), ]
 
-#VOLCANO PLOT
+
+# 6.3 VOLCANO PLOT----------------------------------------
+
 volcano.name <- "PPMI   Patients Longitudinal differential expression + Mutation status.
 "
 l2f.lim <- 0
@@ -913,17 +884,12 @@ result_9circ<- read.table("load/9circ.txt", header = T)
 circ_names<-result_9circ$linear
 #Subset the result_table based on circRNA names
 nine_circ<- plotDE[plotDE$linear %in% circ_names, ]
-
-
-
 cols <- densCols(plotDE$beta, plotDE$padj)
 cols[plotDE$gene_type=='up']<-"#E69F00"
 cols[plotDE$gene_type=='down']<-"#56B4E9"
 cols[plotDE$gene_type=='ns']<-"#999999"
 sizes <- c("up" = 2, "down" = 2, "ns" = 1)
 alphas <- c("up" = 1, "down" = 1, "ns" = 0.5)
-
-
 ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   geom_point(col= cols)+
   scale_y_continuous(expand = c(0,0), limits = c(0, 6))+
@@ -938,7 +904,11 @@ ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   theme_bw()
 
 
-#PPMI MIXED MODEL (Mutation: Non-carrier)
+#7.0 PPMI MIXED MODEL (Mutation: Non-carrier)-------------------------------------------------------------------------------------------------------------------------------------
+
+
+#7.1 Longtable----------------------------------
+
 # load normalized count matrix
 data <- read.table("load/count/matrix.txt", header = T, stringsAsFactors = F)
 
@@ -994,7 +964,9 @@ rand_sample <- patno[sample(1:length(patno), 1)]
 #
 write.table(mixed_model_longtable, 'save/longtable.txt', quote= F, sep = '\t', row.names = F, col.names = T)
 
-#RUN MIXED MODEL 
+
+# 7.2 RUN MIXED MODEL ----------------------------------------------------------
+
 data <- read.table("load/longtable.txt", header = T, stringsAsFactors = F)
 data <- data %>% group_by(PATNO, RNA) %>% mutate(visit_counts = length(time_in_years))
 # filtered with as least two visits
@@ -1020,10 +992,6 @@ for (one_circ in loop_circs){
 
 # save result table
 write.table(full_result_table, "save/results.txt", quote = F, col.names = T, row.names = F, sep = '\t')
-
-
-
-
 #Read table
 full_result_table<- read.table("save/results.txt")
 full_result_table$beta <-as.numeric(full_result_table$beta)
@@ -1040,7 +1008,6 @@ selected_columns <- full_result_table[, c("linear","beta", "p", "padj")]
 # Create a new data frame with the selected columns
 result_table<- as.data.frame(selected_columns)
 
-
 #Getting the gene symbols
 DE<-full_result_table
 #extracting degs
@@ -1052,8 +1019,6 @@ gene_symbols <- mapIds(org.Hs.eg.db, keys = primary_gene_id, column = "SYMBOL", 
 # Add the gene symbols as a new column in your DEG data frame
 DE$gene_symbol <- gene_symbols
 
-
-
 #Reorganizing the df
 #Creating an specific table
 selected_columns <- DE[, c("gene_symbol","beta", "p", "padj", "linear")]
@@ -1063,7 +1028,9 @@ DE<- as.data.frame(selected_columns)
 # DE<-na.omit(DE)
 DE <- DE[order(DE$padj), ]
 
-#VOLCANO PLOT
+
+# 7.3 VOLCANO PLOT----------------------------------------------
+
 volcano.name <- "PPMI   Patients Longitudinal differential expression + noncarriers
 "
 l2f.lim <- 0
@@ -1076,17 +1043,12 @@ result_9circ<- read.table("load/9circ.txt", header = T)
 circ_names<-result_9circ$linear
 #Subset the result_table based on circRNA names
 nine_circ<- plotDE[plotDE$linear %in% circ_names, ]
-
-
-
 cols <- densCols(plotDE$beta, plotDE$padj)
 cols[plotDE$gene_type=='up']<-"#E69F00"
 cols[plotDE$gene_type=='down']<-"#56B4E9"
 cols[plotDE$gene_type=='ns']<-"#999999"
 sizes <- c("up" = 2, "down" = 2, "ns" = 1)
 alphas <- c("up" = 1, "down" = 1, "ns" = 0.5)
-
-
 ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   geom_point(col= cols)+
   scale_y_continuous(expand = c(0,0), limits = c(0, 6))+
@@ -1101,7 +1063,10 @@ ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   theme_bw()+
 
 
-#PPMI MIXED MODEL (Mutations: LRRK2)
+# 8.0 PPMI MIXED MODEL (Mutations: LRRK2)--------------------------------------------------------------------------------------------------------------------------------------
+
+
+#8.1 Longtable-----------------------------------------------------
 
 # load normalized count matrix
 data <- read.table("load/count/matrix.txt", header = T, stringsAsFactors = F)
@@ -1154,7 +1119,9 @@ rand_sample <- patno[sample(1:length(patno), 1)]
 #
 write.table(mixed_model_longtable, 'save/longtable.txt', quote= F, sep = '\t', row.names = F, col.names = T)
 
-#RUN MIXED MODEL 
+
+# 8.1 RUN MIXED MODEL---------------------------------------------- 
+
 data <- read.table("load/longtable.txt", header = T, stringsAsFactors = F)
 data <- data %>% group_by(PATNO, RNA) %>% mutate(visit_counts = length(time_in_years))
 # filtered with as least two visits
@@ -1181,9 +1148,6 @@ for (one_circ in loop_circs){
 # save result table
 write.table(full_result_table, "save/results.txt", quote = F, col.names = T, row.names = F, sep = '\t')
 
-
-
-
 #Read table
 full_result_table<- read.table("save/results.txt")
 full_result_table$beta <-as.numeric(full_result_table$beta)
@@ -1200,7 +1164,6 @@ selected_columns <- full_result_table[, c("linear","beta", "p", "padj")]
 # Create a new data frame with the selected columns
 result_table<- as.data.frame(selected_columns)
 
-
 #Getting the gene symbols
 DE<-full_result_table
 #extracting degs
@@ -1212,8 +1175,6 @@ gene_symbols <- mapIds(org.Hs.eg.db, keys = primary_gene_id, column = "SYMBOL", 
 # Add the gene symbols as a new column in your DEG data frame
 DE$gene_symbol <- gene_symbols
 
-
-
 #Reorganizing the df
 #Creating an specific table
 selected_columns <- DE[, c("gene_symbol","beta", "p", "padj", "linear")]
@@ -1223,7 +1184,9 @@ DE<- as.data.frame(selected_columns)
 # DE<-na.omit(DE)
 DE <- DE[order(DE$padj), ]
 
-#VOLCANO PLOT
+
+# 8.3 VOLCANO PLOT----------------------------------------------
+
 volcano.name <- "PPMI   Patients Longitudinal differential expression + LRRK2"
 l2f.lim <- 0
 plim <- 0.05
@@ -1235,16 +1198,12 @@ result_9circ<- read.table("load/9circ.txt", header = T)
 circ_names<-result_9circ$linear
 #Subset the result_table based on circRNA names
 nine_circ<- plotDE[plotDE$linear %in% circ_names, ]
-
-
-
 cols <- densCols(plotDE$beta, plotDE$padj)
 cols[plotDE$gene_type=='up']<-"#E69F00"
 cols[plotDE$gene_type=='down']<-"#56B4E9"
 cols[plotDE$gene_type=='ns']<-"#999999"
 sizes <- c("up" = 2, "down" = 2, "ns" = 1)
 alphas <- c("up" = 1, "down" = 1, "ns" = 0.5)
-
 
 ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   geom_point(col= cols)+
@@ -1262,7 +1221,11 @@ ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
 
 
 
-#PPMI MIXED MODEL (Mutations : GBA)
+#9.0 PPMI MIXED MODEL (Mutations : GBA)--------------------------------------------------------------------------------------------------------------------------------------
+
+
+#9.1 Longtable----------------------------------------
+
 # load normalized count matrix
 data <- read.table("load/count/matrix.txt", header = T, stringsAsFactors = F)
 
@@ -1314,7 +1277,9 @@ rand_sample <- patno[sample(1:length(patno), 1)]
 #
 write.table(mixed_model_longtable, 'save/longtable.txt', quote= F, sep = '\t', row.names = F, col.names = T)
 
-#RUN MIXED MODEL 
+
+#9.1 RUN MIXED MODEL--------------------------------------- 
+
 data <- read.table("load/longtable.txt", header = T, stringsAsFactors = F)
 data <- data %>% group_by(PATNO, RNA) %>% mutate(visit_counts = length(time_in_years))
 # filtered with as least two visits
@@ -1340,9 +1305,6 @@ for (one_circ in loop_circs){
 
 # save result table
 write.table(full_result_table, "save/results.txt", quote = F, col.names = T, row.names = F, sep = '\t')
-
-
-
 
 #Read table
 full_result_table<- read.table("save/results.txt")
@@ -1372,8 +1334,6 @@ gene_symbols <- mapIds(org.Hs.eg.db, keys = primary_gene_id, column = "SYMBOL", 
 # Add the gene symbols as a new column in your DEG data frame
 DE$gene_symbol <- gene_symbols
 
-
-
 #Reorganizing the df
 #Creating an specific table
 selected_columns <- DE[, c("gene_symbol","beta", "p", "padj", "linear")]
@@ -1383,7 +1343,9 @@ DE<- as.data.frame(selected_columns)
 # DE<-na.omit(DE)
 DE <- DE[order(DE$padj), ]
 
-#VOLCANO PLOT
+
+# 9.3 VOLCANO PLOT-------------------------------------------------
+
 volcano.name <- "PPMI   Patients Longitudinal differential expression + GBA"
 l2f.lim <- 0
 plim <- 0.05
@@ -1395,16 +1357,12 @@ result_9circ<- read.table("load/9circ.txt", header = T)
 circ_names<-result_9circ$linear
 #Subset the result_table based on circRNA names
 nine_circ<- plotDE[plotDE$linear %in% circ_names, ]
-
-
-
 cols <- densCols(plotDE$beta, plotDE$padj)
 cols[plotDE$gene_type=='up']<-"#E69F00"
 cols[plotDE$gene_type=='down']<-"#56B4E9"
 cols[plotDE$gene_type=='ns']<-"#999999"
 sizes <- c("up" = 2, "down" = 2, "ns" = 1)
 alphas <- c("up" = 1, "down" = 1, "ns" = 0.5)
-
 
 ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   geom_point(col= cols)+
@@ -1421,7 +1379,10 @@ ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   theme(legend.position = "none")
 
 
-#PPMI MIXED MODEL (Mutations : SNCA)
+#10. PPMI MIXED MODEL (Mutations : SNCA)---------------------------------------------------------------------------------------------------------------------------------------
+
+
+#10.1 Longtable-----------------------------------------
 
 # load normalized count matrix
 data <- read.table("load/count/matrix.txt", header = T, stringsAsFactors = F)
@@ -1474,7 +1435,9 @@ rand_sample <- patno[sample(1:length(patno), 1)]
 #
 write.table(mixed_model_longtable, 'save/longtable.txt', quote= F, sep = '\t', row.names = F, col.names = T)
 
-#RUN MIXED MODEL 
+
+#10.2 RUN MIXED MODEL-----------------------------------------
+
 data <- read.table("load/longtable.txt", header = T, stringsAsFactors = F)
 data <- data %>% group_by(PATNO, RNA) %>% mutate(visit_counts = length(time_in_years))
 # filtered with as least two visits
@@ -1500,10 +1463,6 @@ for (one_circ in loop_circs){
 
 # save result table
 write.table(full_result_table, "save/results.txt", quote = F, col.names = T, row.names = F, sep = '\t')
-
-
-
-
 #Read table
 full_result_table<- read.table("save/results.txt")
 full_result_table$beta <-as.numeric(full_result_table$beta)
@@ -1520,7 +1479,6 @@ selected_columns <- full_result_table[, c("linear","beta", "p", "padj")]
 # Create a new data frame with the selected columns
 result_table<- as.data.frame(selected_columns)
 
-
 #Getting the gene symbols
 DE<-full_result_table
 #extracting degs
@@ -1533,7 +1491,6 @@ gene_symbols <- mapIds(org.Hs.eg.db, keys = primary_gene_id, column = "SYMBOL", 
 DE$gene_symbol <- gene_symbols
 
 
-
 #Reorganizing the df
 #Creating an specific table
 selected_columns <- DE[, c("gene_symbol","beta", "p", "padj", "linear")]
@@ -1543,7 +1500,9 @@ DE<- as.data.frame(selected_columns)
 # DE<-na.omit(DE)
 DE <- DE[order(DE$padj), ]
 
-#VOLCANO PLOT
+
+# 10.3 VOLCANO PLOT-------------------------------------------
+
 volcano.name <- "PPMI   Patients Longitudinal differential expression + SNCA"
 l2f.lim <- 0
 plim <- 0.05
@@ -1555,16 +1514,12 @@ result_9circ<- read.table("load/9circ.txt", header = T)
 circ_names<-result_9circ$linear
 #Subset the result_table based on circRNA names
 nine_circ<- plotDE[plotDE$linear %in% circ_names, ]
-
-
-
 cols <- densCols(plotDE$beta, plotDE$padj)
 cols[plotDE$gene_type=='up']<-"#E69F00"
 cols[plotDE$gene_type=='down']<-"#56B4E9"
 cols[plotDE$gene_type=='ns']<-"#999999"
 sizes <- c("up" = 2, "down" = 2, "ns" = 1)
 alphas <- c("up" = 1, "down" = 1, "ns" = 0.5)
-
 
 ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   geom_point(col= cols)+
@@ -1578,8 +1533,15 @@ ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   xlab("Effect size: beta") +
   ylab("-log10(p)")+
   theme_bw()
-#Ethnicity analyses
+
+
+#11.0 Ethnicity analyses----------------------------------------------------------------------------------------------------------------------------------------------------
+
 #BOTH PDBP and PPMI cohorts mixed for African Merican
+
+
+#11.1 PPMI-----------------------------------------------------
+
 Load PPMI count matrix
 countMatrix<-read.csv("/countmatrix.csv", row.names = 1)
 #Load PPMI pheno
@@ -1628,8 +1590,8 @@ countMatrixclean<- countMatrix[(rowCounts(countMatrix[,-1]<10) < round(0.9*dim(c
 countMatrix_PPMI<-countMatrixclean
 
 
+# 11.2 PDBP------------------------------------------------------------
 
-#Load PDBP count matrix
 countMatrix<-read.csv("/countmatrix.csv", row.names = 1)
 colnames(countMatrix) <- gsub("\\.", "-", colnames(countMatrix))
 #Load PDBO pheno
@@ -1649,8 +1611,8 @@ countMatrixfinal<- countMatrixclean[, sample_ids]
 countMatrix_PDBP<-floor(countMatrixfinal)
 
 
+# 11.3  Combine both matrixes PDBP and PPMI--------------------------------
 
-# Combine both matrixes PDBP and PPMI
 shared_genes<-countMatrix_PDBP[rownames(countMatrix_PDBP) %in% rownames(countMatrix_PPMI),]
 countMatrix_PDBP$rownames_col <- rownames(countMatrix_PDBP)
 countMatrix_PPMI$rownames_col <- rownames(countMatrix_PPMI)
@@ -1659,7 +1621,6 @@ rownames(countMatrix_combined) <- countMatrix_combined$rownames_col
 
 # Remove the "rowname_col" column from the data frame
 countMatrix_combined <- countMatrix_combined[,-1]
-
 
 # Get the common column names between pheno_PPMI and pheno_PDBP to create a combined phenotype
 common_columns <- intersect(colnames(pheno_PPMI), colnames(pheno_PDBP))
@@ -1673,18 +1634,20 @@ combined_pheno <- rbind(pheno_PPMI_cleaned, pheno_PDBP)
 write.table(combined_pheno, "/combined_phenotype.txt" )
 write.table(countMatrix_combined, "/combined_countmatrix.txt" )
 
-#count normalization
+
+# 11.4 count normalization---------------------------------------------------
+
 countMatrix_combined<- round(countMatrix_combined)
 combined_pheno$visit_month<-as.factor(combined_pheno$visit_month)
 rnaDDS <- DESeqDataSetFromMatrix(countData = countMatrix_combined, colData = combined_pheno, design = ~ 1)
-
 
 vstDDS<-vst(rnaDDS)
 vstDDS<-varianceStabilizingTransformation(rnaDDS)
 vst_countmatrix<-assay(vstDDS)
 write.table(vst_countmatrix,"/norm_countmatrix.txt")
 
-#Principal Components analysis
+
+# 11.5 Principal Components analysis------------------------------------------
 
 plotPCA(vst.all, intgroup="sex")
 pcaData <- plotPCA(vstDDS, intgroup="visit_month",ntop=500 ,returnData = T)
@@ -1700,8 +1663,6 @@ range.pc1 <- c(pc1.mean - dist*pc1.sd, pc1.mean + dist*pc1.sd)
 range.pc2 <- c(pc2.mean - dist*pc2.sd, pc2.mean + dist*pc2.sd)
 # check PCA plots with SD borders
 panel <- c("#E69F00", "#56B4E9", "#999999", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
-
-
 
 plotStatus <- ggplot(pcaData, aes(x = PC1, y = PC2, color = group)) + geom_point() +
   xlab(paste0("PC1: ", rnaPercentVar[1], "% variance")) +
@@ -1736,6 +1697,7 @@ sample_names <- pheno$sample_id_modified[1:67]
 colnames(data)[17:83] <- sample_names
 
 
+ #11. 6 Longtable---------------------------------------------
 
 pheno$time_in_years <- pheno$visit_month / 12
 pheno$Pt-Category <- ifelse(pheno$Pt-Category == "Case", 1,
@@ -1765,21 +1727,16 @@ mixed_model_longtable <- na.omit(mixed_model_longtable)
 
 # create count at baseline
 mixed_model_longtable$counts_at_baseline <- -9
-
 mixed_model_longtable <- mixed_model_longtable %>% group_by(PATNO, circRNA) %>% mutate(counts_at_baseline = counts[which(time_in_years == min(time_in_years))])
-
 any(mixed_model_longtable$counts_at_baseline == -9) # should be FALSE
-
 # checking
 patno <- unique(mixed_model_longtable$PATNO)
 circ_names <- unique(mixed_model_longtable$circRNA)
-
 rand_circ <- circ_names[sample(1:length(circ_names), 1)]
 rand_sample <- patno[sample(1:length(patno), 1)]
 mixed_model_longtable %>% filter(PATNO == rand_sample, circRNA == rand_circ)
 
 write.table(mixed_model_longtable, '/combined_longtable_AA.csv', quote= F, sep = '\t', row.names = F, col.names = T)
-
 
 data<-read.table('/combined_longtable_AA.csv', header = T)
 
@@ -1790,7 +1747,8 @@ str(atleast_2_visit)
 atleast_2_visit <- atleast_2_visit %>%
   filter(circRNA != "ENSG00000279809.1") #Problematic gene, only present in PDBP samples
 
-library("lmerTest")
+
+# 11.7 Mixed Model ---------------------------------------------------------------
 
 loop_circs <- as.character(unique(atleast_2_visit$circRNA))
 
@@ -1812,8 +1770,6 @@ for (one_circ in loop_circs){
 # save result table
 write.table(full_result_table, "/results.AA.txt", quote = F, col.names = T, row.names = F, sep = '\t')
 
-
-
 #Read table
 full_result_table<- read.table("/results.AA.txt", header=T)
 full_result_table$beta <-as.numeric(full_result_table$beta)
@@ -1823,7 +1779,6 @@ full_result_table <- full_result_table %>%
   group_by(covar) %>%
   mutate(padj = p.adjust(p, method = "fdr"))
 
-
 #Create a table for  interaction
 full_result_table<- subset(full_result_table, full_result_table$covar == 'status:time_in_years')
 
@@ -1832,7 +1787,6 @@ selected_columns <- full_result_table[, c("linear","beta", "p", "padj")]
 
 # Create a new data frame with the selected columns
 result_table<- as.data.frame(selected_columns)
-
 
 #Obtaining  the  gene symbols
 DE<-full_result_table
@@ -1845,8 +1799,6 @@ gene_symbols <- mapIds(org.Hs.eg.db, keys = primary_gene_id, column = "SYMBOL", 
 # Add the gene symbols as a new column in your DEG data frame
 DE$gene_symbol <- gene_symbols
 
-
-
 #Reorganizing the df
 #Creating an specific table
 selected_columns <- DE[, c("gene_symbol","beta", "p", "padj", "linear")]
@@ -1856,8 +1808,8 @@ DE<- as.data.frame(selected_columns)
 # DE<-na.omit(DE)
 
 
+# 11.8 VOLCANO PLOT---------------------------------------
 
-#VOLCANO PLOT
 DE <- DE[order(DE$padj), ]
 volcano.name <- "PPMI & PDBP  Longitudinal differential expression African Americans"
 l2f.lim <- 0
@@ -1880,7 +1832,6 @@ cols[plotDE$gene_type=='ns']<-"#999999"
 sizes <- c("up" = 2, "down" = 2, "ns" = 1)
 alphas <- c("up" = 1, "down" = 1, "ns" = 0.5)
 
-
 ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   geom_point(col= cols)+
   scale_y_continuous(expand = c(0,0), limits = c(0, 6))+
@@ -1896,8 +1847,10 @@ ggplot(plotDE, aes(x=beta, y=-log10(padj), size=gene_type, alpha = gene_type))+
   theme(legend.position = "none")
 
 
+#12.0 Recalculating padj values---------------------------------------------------------------------------------------------------------------------------------
 
 #We modified al, our results tables by  recalculating the padj value from our 9circs, using only these 9 transcripts to obtain a padj value.
+
 medication<- read.table("read/medication_simple_result_table.txt", header = T)
 medication<- subset(medication, medication$covar == 'conditioncontrol:years')
 
@@ -1982,7 +1935,6 @@ padjusted<-function(df) {
 nine_results <- lapply(nine_results, padjusted)
 
 
-
 #cleaning df 
 
 # Function to select specific columns from a data frame
@@ -1994,8 +1946,6 @@ select_columns <- function(df) {
 
 # Apply the function to your list of data frames
 nine_results <- lapply(nine_results, select_columns)
-
-
 
 # Directory path
 output_dir <- "/03-DryLab/04-Analyses/2022_PD-Blood-circRNA_LI/2023_linearRNA_Mixed_Model_Santiago/PPMI/results_tables/"
@@ -2018,17 +1968,13 @@ for (i in 1:length(nine_results)) {
   print(paste("Saved CSV file:", file_path))
 }
 
-
-
-#Meta simple model
-install.packages("metaRNASeq")
-library(metaRNASeq)
+# 13.0 Meta simple model------------------------------------------------------------------------------------------------------------------------------------------
 
 result_9circ<- read.table("read/nine_circs", header = T)  
 circ_names<-result_9circ$linear
 
+# 13.1 Read PDBP table--------------------------------------------
 
-#Read PDBP table
 full_result_table_PDBP<- read.table("read/result_table.txt", header = T) 
 
 full_result_table_PDBP$beta <-as.numeric(full_result_table_PDBP$beta)
@@ -2045,7 +1991,8 @@ selected_columns <- full_result_table_PDBP[, c("linear","beta", "p", "padj")]
 discoveryDE<- as.data.frame(selected_columns)
 
 
-#Read PPMI data
+# 13.2 Read PPMI data------------------------------------------------
+
 full_result_table_PPMI<-read.table("read/results_table", header = T)
 full_result_table_PPMI$beta <-as.numeric(full_result_table_PPMI$beta)
 full_result_table_PPMI$p <-as.numeric(full_result_table_PPMI$p)
@@ -2061,6 +2008,9 @@ selected_columns <- full_result_table_PPMI[, c("linear","beta", "p", "padj")]
 # Create a new data frame with the selected columns
 replicationDE<- as.data.frame(selected_columns)
 
+
+#13.3 Meta analysis
+
 names(discoveryDE)<-c("Gene", "disFC", "disPraw", "disPadj")
 names(replicationDE)<-c("Gene", "repFC", "repPraw")
 DE<-merge(discoveryDE, replicationDE, by="Gene")
@@ -2073,7 +2023,8 @@ names(metaDE)[c(8,9)]<-c("fishPraw", "fishPadj")
 write.csv(metaDE, row.names = F)
 
 
-#Meta cell counts model
+# 14.0 Meta cell counts model-----------------------------------------------------------------------------------------------------------------------------------------
+
 install.packages("metaRNASeq")
 library(metaRNASeq)
 
@@ -2081,7 +2032,8 @@ result_9circ<- read.table("read/nine_circs", header = T)
 circ_names<-result_9circ$linear
 
 
-#Read PDBP table
+# 14.1 Read PDBP table------------------------------------------
+
 full_result_table_PDBP<- read.table("read/cell_counts_result_table.txt", header = T) 
 
 full_result_table_PDBP$beta <-as.numeric(full_result_table_PDBP$beta)
@@ -2098,11 +2050,11 @@ selected_columns <- full_result_table_PDBP[, c("linear","beta", "p", "padj")]
 discoveryDE<- as.data.frame(selected_columns)
 
 
-#Read PPMI data
+# 14.2 Read PPMI data--------------------------------------------
+
 full_result_table_PPMI<-read.table("read/cell_counts_results_table", header = T)
 full_result_table_PPMI$beta <-as.numeric(full_result_table_PPMI$beta)
 full_result_table_PPMI$p <-as.numeric(full_result_table_PPMI$p)
-
 full_result_table_PPMI <- full_result_table_PPMI %>%
   group_by(covar) %>%
   mutate(padj = p.adjust(p, method = "fdr"))
@@ -2113,6 +2065,9 @@ colnames(full_result_table_PPMI)[colnames(full_result_table_PPMI) == "circ"] <-"
 selected_columns <- full_result_table_PPMI[, c("linear","beta", "p", "padj")]
 # Create a new data frame with the selected columns
 replicationDE<- as.data.frame(selected_columns)
+
+
+#14.3 meta analysis---------------------------------------------
 
 names(discoveryDE)<-c("Gene", "disFC", "disPraw", "disPadj")
 names(replicationDE)<-c("Gene", "repFC", "repPraw")
