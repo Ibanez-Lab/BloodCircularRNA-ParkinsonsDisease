@@ -1,0 +1,381 @@
+#Code that was 
+#Get the 9 circ degs
+result_9circ<- read.table("9circs.txt", header = T)  
+# 
+ nine<-result_9circ$linear
+
+#Adding linear and circular counts to the model fro FAM13B
+
+# #PDBP---------------------------------------------------------------------------------------------------------
+pdbp_count_matrix<-read.csv("pdbp_countmatrix.csv", row.names = 1)
+
+#load phenotype
+pdbp_pheno <- read.table('pdbp_pheno.txt', header = T, stringsAsFactors = F)
+
+# check time variable is numeric
+str(pdbp_pheno$visit_month)
+pdbp_pheno$time_in_years <- pdbp_pheno$visit_month / 12
+pdbp_pheno$age <- pdbp_pheno$age_at_baseline + pdbp_pheno$time_in_years
+pdbp_pheno <- pdbp_pheno %>% group_by(participant_id) %>% mutate(visit_counts = length(time_in_years))
+# filtered fr last visit
+pdbp_pheno <- pdbp_pheno %>% group_by(participant_id) %>% mutate(last_visit = (visit_month == max(visit_month)))
+pdbp_pheno <- subset(pdbp_pheno, pdbp_pheno$last_visit == T)
+#Removing sample with low reads
+pdbp_countMatrixclean<- pdbp_count_matrix[(rowCounts(pdbp_count_matrix[,-1]<10) < round(0.9*dim(pdbp_count_matrix[,-1])[2])),]
+pdbp_pheno <- pdbp_pheno[pdbp_pheno$sample_id %in% colnames(pdbp_countMatrixclean),]
+
+# Extract the sample IDs from the phenotype data
+sample_ids <- pdbp_pheno$sample_id
+
+#Subset the countMatrix to include only the columns in sample_ids
+pdbp_countMatrixfinal<- pdbp_countMatrixclean[, sample_ids]
+pdbp_countMatrixfinal<-floor(pdbp_countMatrixfinal)
+
+pdbp_countMatrix<-pdbp_countMatrixfinal
+
+# Now, pdbp_count_matrix has gene symbols as row names
+#pdbp_count_matrix<-t(pdbp_count_matrix)
+
+##get circular counts
+data <- read.table("pdbp_circ_countmatrix.txt", header = T, stringsAsFactors = F)
+com <- read.table("common_circs_countmatrix.txt")
+com <- com$V1
+data <- subset(data, rownames(data) %in% com)
+circ_pdbp_countMatrix<-data
+circ_pdbp_countMatrix<-circ_pdbp_countMatrix[, sample_ids]
+pdbp_finalmatrix<-rbind(circ_pdbp_countMatrix, pdbp_countMatrix)
+#Normalize combined matrix
+rnaDDS <- DESeqDataSetFromMatrix(countData =pdbp_finalmatrix , colData = pdbp_pheno, design = ~ 1)
+vstDDS<-varianceStabilizingTransformation(rnaDDS)
+pdbp_vst_countmatrix<-assay(vstDDS)
+
+#Get counts for linear ans circ of FAM13B
+fam<-pdbp_vst_countmatrix[c("circFAM13B","ENSG00000031003.10"),]
+fam<-t(fam)
+fam<-as.data.frame(fam)
+
+#Merge fam counts to the pheno
+fam_pheno <- merge(fam, pdbp_pheno, by.x = 0, by.y = "sample_id", all.x = TRUE)
+colnames(fam_pheno)[colnames(fam_pheno) == "Row.names"] <- "sample_id"
+
+# View the updated pheno
+print(fam_pheno)
+
+
+# load normalized cell counts
+cell_counts<-read.csv("cell_counts.csv")
+#merge cell counts to pheno
+fam_pheno <- merge(cell_counts, fam_pheno, by = "sample_id")
+
+# select covariates in pheno that are needed for DESeq2
+fam_pheno2 <- fam_pheno %>% select(sample_id,ENSG00000031003.10,circFAM13B,  B_cell , T_cell_CD4 , T_cell_CD8 , Monocyte , NK_cell , Neutrophil)
+
+fam_pheno_deseq<-merge(fam_pheno2, pdbp_pheno, by= "sample_id")
+str(fam_pheno_deseq)
+#preparing count matrix fro DESEQ
+#data2<-circ_pdbp_countMatrix[,fam_pheno_deseq$sample_id] #analyzing circ counts
+data2 <- pdbp_countMatrixclean[,fam_pheno_deseq$sample_id] ##analyzing linear counts
+deseq2_count_input <- as.matrix(data2)
+deseq2_count_input<-floor(deseq2_count_input)
+
+dds <- DESeqDataSetFromMatrix(countData = deseq2_count_input, colData = fam_pheno_deseq, design = ~ sex +  age +  circFAM13B + B_cell + T_cell_CD4 + T_cell_CD8 + Monocyte + NK_cell + Neutrophil + Pt.Category)
+
+dds.de <- DESeq(dds, parallel = F, betaPrior = FALSE)
+
+dds.res <- results(dds.de, tidy = T)
+
+
+write.csv(dds.res,"pdbp_fam_deseq_degs_linear.csv")
+
+# #PPMI-----------------------------------------------------------------------------------------------------
+pheno<- read.table("ppmi_pheno.txt", header = T, stringsAsFactors = F)
+pheno <- subset(pheno, pheno$Status_time != 2)
+pheno <- pheno %>% group_by(PATNO) %>% mutate(visit_counts = length(time_in_years))
+# filtered fr last visit
+pheno <- pheno %>% group_by(PATNO) %>% mutate(last_visit = (Time == max(Time)))
+pheno <- subset(pheno, pheno$last_visit == T)
+#Creating sample_id column
+pheno$sample_id<- paste("PP-", pheno$PATNO, "-", pheno$EVENT_ID, "M", pheno$EVENTCode, "T1", sep = "")
+pheno$sample_id <- gsub("V0[0-9]", "SV", pheno$sample_id)
+# Replace M1 with M6, M2 with M12, M3 with M24, and M4 with M36 in sample_id_2 column
+pheno$sample_id <- gsub("M1", "M6", pheno$sample_id)
+pheno$sample_id <- gsub("M2", "M12", pheno$sample_id)
+pheno$sample_id <- gsub("M3", "M24", pheno$sample_id)
+pheno$sample_id <- gsub("M4", "M36", pheno$sample_id)
+
+# Load cell coun data
+cell_counts<-read.csv("cell_counts.csv")
+#merge cell counts to pheno
+pheno <- merge(cell_counts, pheno, by = "sample_id")
+
+#Load ppmi count matrix
+ppmi_countMatrix<-read.csv("pp_countmatrix.csv", row.names = 1)
+
+#Removing sample with low reads
+ppmi_countMatrixclean<- ppmi_countMatrix[(rowCounts(ppmi_countMatrix[,-1]<10) < round(0.9*dim(ppmi_countMatrix[,-1])[2])),]
+pheno <- pheno[pheno$FILE_NAME %in% colnames(ppmi_countMatrixclean),]
+
+# Extract the sample IDs from the phenotype data
+sample_ids <- pheno$FILE_NAME
+
+# Subset the countMatrix to include only the columns in sample_ids
+ppmi_countMatrixfinal<- ppmi_countMatrixclean[, sample_ids]
+
+#get circular counts
+data <- read.table("ppmi_circ_countmatrix.txt", header = T, stringsAsFactors = F)
+com <- read.table("ppmi_common_circs_countmatrix.txt")
+com <- com$V1
+circ_ppmi_countMatrix<- subset(data, rownames(data) %in% com)
+
+circ_ppmi_countMatrix<-circ_ppmi_countMatrix[, sample_ids]
+
+ppmi_finalmatrix<-rbind(circ_ppmi_countMatrix, ppmi_countMatrixfinal)
+ppmi_finalmatrix<-floor(ppmi_finalmatrix)
+rnaDDS <- DESeqDataSetFromMatrix(countData =ppmi_finalmatrix , colData = pheno, design = ~ 1)
+vstDDS<-varianceStabilizingTransformation(rnaDDS)
+ppmi_vst_countmatrix<-assay(vstDDS)
+
+
+fam<-ppmi_vst_countmatrix[c("circFAM13B","ENSG00000031003.10"),]
+fam<-t(fam)
+fam<-as.data.frame(fam)
+
+
+fam_pheno <- merge(fam, pheno, by.x = 0, by.y = "FILE_NAME", all.x = TRUE)
+colnames(fam_pheno)[colnames(fam_pheno) == "Row.names"] <- "FILE_NAME"
+
+
+# select covariates in pheno that are needed for DESeq2
+fam_pheno2 <- fam_pheno %>% select(FILE_NAME,ENSG00000031003.10, circFAM13B)
+
+fam_pheno_deseq<-merge(fam_pheno2, pheno, by= "FILE_NAME")
+
+#data2<-circ_ppmi_countMatrix[,fam_pheno_deseq$FILE_NAME]  #3analyzing circ counts
+data2 <- ppmi_countMatrixfinal[,fam_pheno_deseq$FILE_NAME] ## analyzing linear counts
+deseq2_count_input <- as.matrix(data2)
+deseq2_count_input<-floor(deseq2_count_input)
+dds <- DESeqDataSetFromMatrix(countData = deseq2_count_input, colData = fam_pheno_deseq, design = ~ factor(Gender) +  AgeVisit +  circFAM13B + B_cell + T_cell_CD4 + T_cell_CD8 + Monocyte + NK_cell + Neutrophil + factor(Status_time))
+
+dds.de <- DESeq(dds, parallel = F, betaPrior = FALSE)
+
+dds.res <- results(dds.de, tidy = T)
+
+
+write.csv(dds.res,"ppmi_fam_deseq_degs_linear.csv" )
+
+
+#meta deseq----------------------------------------------------------------------------------------------------
+ replicationDE=read.csv("/ppmi_fam_deseq_degs_linear.csv", header=T, row.names = 1)
+replicationDE<-replicationDE[,c(1, 3,6)]
+discoveryDE=read.csv("/pdbp_fam_deseq_degs_linear.csv", header=T, row.names = 1)
+ discoveryDE<-discoveryDE[,c(1, 3,6, 7)]
+
+
+names(discoveryDE)<-c("Gene", "disFC", "disPraw", "disPadj")
+names(replicationDE)<-c("Gene", "repFC", "repPraw")
+DE<-merge(discoveryDE, replicationDE, by="Gene")
+DE<-DE[sign(DE$disFC)==sign(DE$repFC),]
+#pvalues<-list(DE$disPraw,DE$repPraw)
+
+fishcomb<-metaRNASeq::fishercomb(list(DE$disPraw, DE$repPraw), BHth = 0.05)
+
+# hist(fishcomb$rawpval, breaks=100, col="grey", main="Fisher method")
+
+metaDE<-cbind(DE,fishcomb$rawpval,fishcomb$adjpval)
+#metaDE<-metaDE[metaDE$disPadj<=0.05,]
+metaDE$repPadj<-p.adjust(metaDE$repPraw, method = "fdr")
+names(metaDE)[c(8,9)]<-c("fishPraw", "fishPadj")
+
+SPI1------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+#Get the 9 circ degs
+result_9circ<- read.table("nine_circs.txt", header = T)  
+# 
+nine<-result_9circ$linear
+
+#Linear regression
+
+# # #PDBP------------------------------------------------------------------------------------------------------
+pdbp_count_matrix<-read.csv("pdbp_countmatrix.csv", row.names = 1)
+
+#load phenotype
+pdbp_pheno <- read.table('pdbp_pheno.txt', header = T, stringsAsFactors = F)
+
+# check time variable is numeric
+str(pdbp_pheno$visit_month)
+pdbp_pheno$time_in_years <- pdbp_pheno$visit_month / 12
+pdbp_pheno$age <- pdbp_pheno$age_at_baseline + pdbp_pheno$time_in_years
+pdbp_pheno <- pdbp_pheno %>% group_by(participant_id) %>% mutate(visit_counts = length(time_in_years))
+# filtered fr last visit
+pdbp_pheno <- pdbp_pheno %>% group_by(participant_id) %>% mutate(last_visit = (visit_month == max(visit_month)))
+pdbp_pheno <- subset(pdbp_pheno, pdbp_pheno$last_visit == T)
+#Removing sample with low reads
+pdbp_countMatrixclean<- pdbp_count_matrix[(rowCounts(pdbp_count_matrix[,-1]<10) < round(0.9*dim(pdbp_count_matrix[,-1])[2])),]
+pdbp_pheno <- pdbp_pheno[pdbp_pheno$sample_id %in% colnames(pdbp_countMatrixclean),]
+
+# Extract the sample IDs from the phenotype data
+sample_ids <- pdbp_pheno$sample_id
+
+#Subset the countMatrix to include only the columns in sample_ids
+pdbp_countMatrixfinal<- pdbp_countMatrixclean[, sample_ids]
+pdbp_countMatrixfinal<-floor(pdbp_countMatrixfinal)
+
+pdbp_countMatrix<-pdbp_countMatrixfinal
+
+# Now, pdbp_count_matrix has gene symbols as row names
+#pdbp_count_matrix<-t(pdbp_count_matrix)
+
+# load raw count matrix (not the normalized one, DESeq2 does not take normalized value)
+data <- read.table("pdbp_circ_countmatrix.txt", header = T, stringsAsFactors = F)
+com <- read.table("pdbp_common_circs_countmatrix.txt")
+com <- com$V1
+data <- subset(data, rownames(data) %in% com)
+circ_pdbp_countMatrix<-data
+circ_pdbp_countMatrix<-circ_pdbp_countMatrix[, sample_ids]
+pdbp_finalmatrix<-rbind(circ_pdbp_countMatrix, pdbp_countMatrix)
+#Normalize combined matrix
+rnaDDS <- DESeqDataSetFromMatrix(countData =pdbp_finalmatrix , colData = pdbp_pheno, design = ~ 1)
+vstDDS<-varianceStabilizingTransformation(rnaDDS)
+pdbp_vst_countmatrix<-assay(vstDDS)
+
+#Get counts for linear ans circ of FAM13B
+fam<-pdbp_vst_countmatrix[c("circSPI1","ENSG00000066336.11"),]
+fam<-t(fam)
+fam<-as.data.frame(fam)
+
+#Merge fam counts to the pheno
+fam_pheno <- merge(fam, pdbp_pheno, by.x = 0, by.y = "sample_id", all.x = TRUE)
+colnames(fam_pheno)[colnames(fam_pheno) == "Row.names"] <- "sample_id"
+
+# View the updated pheno
+print(fam_pheno)
+
+
+# load normalized cell counts
+cell_counts<-read.csv("cellcounts.csv")
+#merge cell counts to pheno
+fam_pheno <- merge(cell_counts, fam_pheno, by = "sample_id")
+#merge cell counts to pheno
+
+# select covariates in pheno that are needed for DESeq2
+fam_pheno2 <- fam_pheno %>% select(sample_id,ENSG00000066336.11,circSPI1,  B_cell , T_cell_CD4 , T_cell_CD8 , Monocyte , NK_cell , Neutrophil)
+
+fam_pheno_deseq<-merge(fam_pheno2, pdbp_pheno, by= "sample_id")
+str(fam_pheno_deseq)
+#Prepare count matrix fro deseq
+#data2<-circ_pdbp_countMatrix[,fam_pheno_deseq$sample_id]    #Using circ counts
+data2 <- pdbp_countMatrixclean[,fam_pheno_deseq$sample_id]  #Using linear counts
+
+deseq2_count_input <- as.matrix(data2)
+deseq2_count_input<-floor(deseq2_count_input)
+
+dds <- DESeqDataSetFromMatrix(countData = deseq2_count_input, colData = fam_pheno_deseq, design = ~ sex +  age + circSPI1  + B_cell + T_cell_CD4 + T_cell_CD8 + Monocyte + NK_cell + Neutrophil + Pt.Category)
+
+dds.de <- DESeq(dds, parallel = F, betaPrior = FALSE)
+
+dds.res <- results(dds.de, tidy = T)
+
+
+write.csv(dds.res,"pdbp_spi1_deseq_degs_linear.csv" )
+
+
+#PPMI------------------------------------------------------------------------------------------------------------
+pheno<- read.table("ppmi_pheno.txt", header = T, stringsAsFactors = F)
+pheno <- subset(pheno, pheno$Status_time != 2)
+pheno <- pheno %>% group_by(PATNO) %>% mutate(visit_counts = length(time_in_years))
+# filtered fr last visit
+pheno <- pheno %>% group_by(PATNO) %>% mutate(last_visit = (Time == max(Time)))
+pheno <- subset(pheno, pheno$last_visit == T)
+#Creating sample_id column
+pheno$sample_id<- paste("PP-", pheno$PATNO, "-", pheno$EVENT_ID, "M", pheno$EVENTCode, "T1", sep = "")
+pheno$sample_id <- gsub("V0[0-9]", "SV", pheno$sample_id)
+# Replace M1 with M6, M2 with M12, M3 with M24, and M4 with M36 in sample_id_2 column
+pheno$sample_id <- gsub("M1", "M6", pheno$sample_id)
+pheno$sample_id <- gsub("M2", "M12", pheno$sample_id)
+pheno$sample_id <- gsub("M3", "M24", pheno$sample_id)
+pheno$sample_id <- gsub("M4", "M36", pheno$sample_id)
+
+# Load cell coun data
+cell_counts<-read.csv("cell_counts.csv")
+#merge cell counts to pheno
+pheno <- merge(cell_counts, pheno, by = "sample_id")
+
+#Load ppmi count matrix
+ppmi_countMatrix<-read.csv("ppmi_countmatrix.txt", row.names = 1)
+
+#Removing sample with low reads
+ppmi_countMatrixclean<- ppmi_countMatrix[(rowCounts(ppmi_countMatrix[,-1]<10) < round(0.9*dim(ppmi_countMatrix[,-1])[2])),]
+pheno <- pheno[pheno$FILE_NAME %in% colnames(ppmi_countMatrixclean),]
+
+# Extract the sample IDs from the phenotype data
+sample_ids <- pheno$FILE_NAME
+
+# Subset the countMatrix to include only the columns in sample_ids
+ppmi_countMatrixfinal<- ppmi_countMatrixclean[, sample_ids]
+
+
+data <- read.table("ppmi_circ_countmatrix.txt", header = T, stringsAsFactors = F)
+com <- read.table("ppmi_common_circ_countmatrix.txt")
+com <- com$V1
+circ_ppmi_countMatrix<- subset(data, rownames(data) %in% com)
+
+circ_ppmi_countMatrix<-circ_ppmi_countMatrix[, sample_ids]
+
+
+
+ppmi_finalmatrix<-rbind(circ_ppmi_countMatrix, ppmi_countMatrixfinal)
+ppmi_finalmatrix<-floor(ppmi_finalmatrix)
+rnaDDS <- DESeqDataSetFromMatrix(countData =ppmi_finalmatrix , colData = pheno, design = ~ 1)
+vstDDS<-varianceStabilizingTransformation(rnaDDS)
+ppmi_vst_countmatrix<-assay(vstDDS)
+
+
+fam<-ppmi_vst_countmatrix[c("circSPI1","ENSG00000066336.11"),]
+fam<-t(fam)
+fam<-as.data.frame(fam)
+
+
+fam_pheno <- merge(fam, pheno, by.x = 0, by.y = "FILE_NAME", all.x = TRUE)
+colnames(fam_pheno)[colnames(fam_pheno) == "Row.names"] <- "FILE_NAME"
+
+
+
+# select covariates in pheno that are needed for DESeq2
+fam_pheno2 <- fam_pheno %>% select(FILE_NAME,ENSG00000066336.11, circSPI1)
+
+fam_pheno_deseq<-merge(fam_pheno2, pheno, by= "FILE_NAME")
+
+#Prepare the count matrix
+#data2<-circ_ppmi_countMatrix[,fam_pheno_deseq$FILE_NAME]      ##For circ counts
+data2 <- ppmi_countMatrixfinal[,fam_pheno_deseq$FILE_NAME]   ##For linear counts
+deseq2_count_input <- as.matrix(data2)
+deseq2_count_input<-floor(deseq2_count_input)
+dds <- DESeqDataSetFromMatrix(countData = deseq2_count_input, colData = fam_pheno_deseq, design = ~ factor(Gender) +  AgeVisit + circSPI1 + B_cell + T_cell_CD4 + T_cell_CD8 + Monocyte + NK_cell + Neutrophil + factor(Status_time))
+
+dds.de <- DESeq(dds, parallel = F, betaPrior = FALSE)
+
+dds.res <- results(dds.de, tidy = T)
+
+
+write.csv(dds.res,"ppmi_spi1_deseq_degs_linear.csv" )
+
+#meta deseq--------------------------------------------------------------------------------------------------------------
+replicationDE=read.csv("ppmi_spi1_deseq_degs_linear.csv", header=T, row.names = 1)
+replicationDE<-replicationDE[,c(1, 3,6)]
+discoveryDE=read.csv("pdbp_spi1_deseq_degs_linear.csv", header=T, row.names = 1)
+discoveryDE<-discoveryDE[,c(1, 3,6, 7)]
+
+
+names(discoveryDE)<-c("Gene", "disFC", "disPraw", "disPadj")
+names(replicationDE)<-c("Gene", "repFC", "repPraw")
+DE<-merge(discoveryDE, replicationDE, by="Gene")
+DE<-DE[sign(DE$disFC)==sign(DE$repFC),]
+#pvalues<-list(DE$disPraw,DE$repPraw)
+
+fishcomb<-metaRNASeq::fishercomb(list(DE$disPraw, DE$repPraw), BHth = 0.05)
+
+# hist(fishcomb$rawpval, breaks=100, col="grey", main="Fisher method")
+
+metaDE<-cbind(DE,fishcomb$rawpval,fishcomb$adjpval)
+#metaDE<-metaDE[metaDE$disPadj<=0.05,]
+metaDE$repPadj<-p.adjust(metaDE$repPraw, method = "fdr")
+names(metaDE)[c(8,9)]<-c("fishPraw", "fishPadj")
