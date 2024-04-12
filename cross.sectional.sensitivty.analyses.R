@@ -444,3 +444,71 @@ res <- cbind(x1.p, y1.p, x2.p, y2.p, x3.p, y3.p)
 out <- res[!rownames(res) %in% c("circC1orf112", "circRAB11FIP1", "circUTRN"), ]
 write.table(out, "MoCA_UPDRS_correlation.txt", quote = F, row.names = T, col.names = T, sep = "\t")
 
+# VI - At-risk analyses --------------------------------------------------------------------
+# Load and format the data -----
+# load raw count matrix 
+data <- read.table("PPMI/clean.counts.tsv", header = T, stringsAsFactors = F)
+com <- read.table("common_circRNAs_btw_PDBP_and_PPMI.txt")
+com <- com$V1
+data <- subset(data, rownames(data) %in% com)
+# load cleaned phenotype data
+pheno <- read.table('PPMI/clean.pheno.txt', header = T, stringsAsFactors = F)
+pheno <- subset(pheno, pheno$Status...13!="CONVERTER")
+pheno$Mutation[is.na(pheno$Mutation)]<-"NONE"
+# select for last visit only
+pheno <- pheno %>% group_by(PATNO) %>% mutate(last_visit = (Time == max(Time)))
+pheno <- subset(pheno, pheno$last_visit == T)
+# select covariates in pheno that are needed for DESeq2
+pheno <- pheno %>% select(FILE_NAME, sex = Gender, status = Status_time, age = AgeVisit, PATNO, Mutation)
+data <- data[,pheno$FILE_NAME]
+# 1. DEA at-risk LRRK2+ vs healthy control -----
+depheno<-pheno[pheno$status%in%c(0,2) & pheno$Mutation%in%c("NONE","LRRK2+"),]
+depheno$status[depheno$status==2]<-1
+dedata<-data[,colnames(data)%in%depheno$FILE_NAME]
+dedata<-dedata[,depheno$FILE_NAME]
+dedata <- as.matrix(dedata)
+dds <- DESeqDataSetFromMatrix(countData = dedata, colData = depheno, design = ~ factor(sex) + age + factor(status))
+dds.de <- DESeq(dds, parallel = F, betaPrior = FALSE)
+dds.res <- results(dds.de, tidy = T)
+# Save DE results
+DE <- dds.res[order(dds.res$padj), ]
+write.csv(DE,"DE.age.sex.atRiskLRRK2vsCO.csv", row.names = F)
+
+# 2. DEA at-risk GBA+ vs healthy control -----
+depheno<-pheno[pheno$status%in%c(0,2) & pheno$Mutation%in%c("NONE","GBA+"),]
+depheno$status[depheno$status==2]<-1
+dedata<-data[,colnames(data)%in%depheno$FILE_NAME]
+dedata<-dedata[,depheno$FILE_NAME]
+dedata <- as.matrix(dedata)
+dds <- DESeqDataSetFromMatrix(countData = dedata, colData = depheno, design = ~ factor(sex) + age + factor(status))
+dds.de <- DESeq(dds, parallel = F, betaPrior = FALSE)
+dds.res <- results(dds.de, tidy = T)
+# Save DE results
+DE <- dds.res[order(dds.res$padj), ]
+write.csv(DE,"DE.age.sex.atRiskGBAvsCO.csv", row.names = F)
+
+# 3. DEA at-risk HYP vs healthy control -----
+depheno<-pheno[pheno$status%in%c(0,2) & pheno$Mutation%in%c("NONE","HYP"),]
+depheno$status[depheno$status==2]<-1
+dedata<-data[,colnames(data)%in%depheno$FILE_NAME]
+dedata<-dedata[,depheno$FILE_NAME]
+dedata <- as.matrix(dedata)
+dds <- DESeqDataSetFromMatrix(countData = dedata, colData = depheno, design = ~ factor(sex) + age + factor(status))
+dds.de <- DESeq(dds, parallel = F, betaPrior = FALSE)
+dds.res <- results(dds.de, tidy = T)
+# Save DE results
+DE <- dds.res[order(dds.res$padj), ]
+write.csv(DE,"DE.age.sex.atRiskHYPvsCO.csv", row.names = F)
+
+# 4. DEA at-risk RBD vs healthy control -----
+depheno<-pheno[pheno$status%in%c(0,2) & pheno$Mutation%in%c("NONE","RBD"),]
+depheno$status[depheno$status==2]<-1
+dedata<-data[,colnames(data)%in%depheno$FILE_NAME]
+dedata<-dedata[,depheno$FILE_NAME]
+dedata <- as.matrix(dedata)
+dds <- DESeqDataSetFromMatrix(countData = dedata, colData = depheno, design = ~ factor(sex) + age + factor(status))
+dds.de <- DESeq(dds, parallel = F, betaPrior = FALSE)
+dds.res <- results(dds.de, tidy = T)
+# Save DE results
+DE <- dds.res[order(dds.res$padj), ]
+write.csv(DE,"DE.age.sex.atRiskRBDvsCO.csv", row.names = F)
